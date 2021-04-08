@@ -124,7 +124,7 @@ object IEO {
       Kleisli.liftF(EitherT.liftF(F.delay(o))).wrap
   }
   def delay[F[_]]: DelayBuilder[F] = new DelayBuilder[F]
-  
+
   def lift[F[_], I, E, O](f: I => F[Either[E, O]]): IEO[F, I, E, O] =
     Kleisli(f andThen EitherT.apply).wrap
   def fromCats[F[_], I, E, O](
