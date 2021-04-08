@@ -19,8 +19,8 @@ import scala.annotation.unchecked.uncheckedVariance
   * your IO monad (handling side-effects, laziness, and exceptions), when your `F` values:
   *
   *  - are created from some input `I`
-  *  - can fail not only due to exceptions (infrastructure error, unrelated to your domain), but also due do business
-  *    rules which enumerate possible errors as valid results and part of your domain (`E)`,
+  *  - can fail not only due to exceptions (infrastructure error/error unrelated to your domain), but also due do
+  *    business rules which enumerate possible errors as valid results and part of your domain (`E`),
   *    which aren't part of your happy path and its output (`O`)
   *
   * Normally, you would have to either use [[cats.data.Kleisli]] and [[cats.data.EitherT]] directly, or rely on tagless
