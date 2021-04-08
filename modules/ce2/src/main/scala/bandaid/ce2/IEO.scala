@@ -1,9 +1,9 @@
 package bandaid.ce2
 
 import bandaid.ce2.IEO._
-import cats.data.{EitherT, Kleisli}
+import cats.data.{ EitherT, Kleisli }
 import cats.effect.Sync
-import cats.{Applicative, ApplicativeError, Defer, Functor, Monad, ~>}
+import cats.{ ~>, Applicative, ApplicativeError, Defer, Functor, Monad }
 
 import scala.annotation.unchecked.uncheckedVariance
 
@@ -46,10 +46,12 @@ final class IEO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends
 
   def flatMap[I2 <: I, E2 >: E, O2](f: O => IEO[F, I2, E2, O2])(implicit F: Monad[F]): IEO[F, I2, E2, O2] =
     (unwrap: Inner[F, I2, E2, O]).flatMap[O2, I2](f(_).unwrap).wrap
-  // TODO: flatten!!!
+  def flatten[I2 <: I, E2 >: E, O2](implicit ev: O <:< IEO[F, I2, E2, O2], F: Monad[F]): IEO[F, I2, E2, O2] =
+    flatMap(identity(_))
 
-  def handleError[O2 >: O](f: E => O2)(implicit F: Monad[F]): IEO[F, I, Nothing, O2] =
-    (unwrap: Inner[F, I, E, O2]).mapF(_.leftFlatMap[O2, Nothing](e => EitherT.pure(f(e)))).wrap
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf")) // workaround for .recover taking PF
+  def handleError[O2 >: O](f: E => O2)(implicit F: Functor[F]): IEO[F, I, Nothing, O2] =
+    (unwrap: Inner[F, I, E, O2]).mapF(_.recover { case e => f(e) }).wrap.asInstanceOf[IEO[F, I, Nothing, O2]]
   def handleSomeError[O2 >: O](f: PartialFunction[E, O2])(implicit F: Functor[F]): IEO[F, I, E, O2] =
     (unwrap: Inner[F, I, E, O2]).mapF(_.recover(f)).wrap
   def handleErrorWith[I2 <: I, O2 >: O](
@@ -115,7 +117,7 @@ object IEO {
 
   final private[ce2] class DeferBuilder[F[_]] {
     def apply[I, E, O](ieo: => IEO[F, I, E, O])(implicit F: Monad[F], defer: Defer[F]): IEO[F, I, E, O] =
-      Kleisli.liftF(EitherT.liftF(defer.defer(F.pure(ieo)))).wrap.flatMap(identity(_)) // TODO: use flatten when defined
+      Kleisli.liftF(EitherT.liftF(defer.defer(F.pure(ieo)))).wrap.flatten
   }
   def defer[F[_]]: DeferBuilder[F] = new DeferBuilder[F]
 
