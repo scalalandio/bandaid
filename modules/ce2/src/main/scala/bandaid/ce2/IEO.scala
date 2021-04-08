@@ -1,8 +1,9 @@
 package bandaid.ce2
 
 import bandaid.ce2.IEO._
-import cats.data.{EitherT, Kleisli}
-import cats.{Applicative, Functor, Monad}
+import cats.data.{ EitherT, Kleisli }
+import cats.effect.Sync
+import cats.{ Applicative, ApplicativeError, Defer, Functor, Monad }
 
 import scala.annotation.unchecked.uncheckedVariance
 
@@ -34,9 +35,7 @@ import scala.annotation.unchecked.uncheckedVariance
   * @tparam E a typed error that can be handled independently of [[java.lang.Throwable]]
   * @tparam O an output of the successful computation
   */
-final class IEO[F[_], -I, +E, +O](
-  private val unwrap: Inner[F, I, E, O]
-) extends AnyVal {
+final class IEO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends AnyVal {
 
   def contramap[I2](f: I2 => I): IEO[F, I2, E, O] = unwrap.local(f).wrap
 
@@ -47,12 +46,24 @@ final class IEO[F[_], -I, +E, +O](
 
   def flatMap[I2 <: I, E2 >: E, O2](f: O => IEO[F, I2, E2, O2])(implicit F: Monad[F]): IEO[F, I2, E2, O2] =
     (unwrap: Inner[F, I2, E2, O]).flatMap[O2, I2](f(_).unwrap).wrap
+  // TODO: flatten!!!
 
-  // TODO: handleErrorWith, handleSomeErrorWith
   def handleError[O2 >: O](f: E => O2)(implicit F: Monad[F]): IEO[F, I, Nothing, O2] =
-    (unwrap: Inner[F, I, E, O2]).mapF(_.biflatMap[Nothing, O2](e => EitherT.pure(f(e)), EitherT.pure(_))).wrap
+    (unwrap: Inner[F, I, E, O2]).mapF(_.leftFlatMap[O2, Nothing](e => EitherT.pure(f(e)))).wrap
   def handleSomeError[O2 >: O](f: PartialFunction[E, O2])(implicit F: Functor[F]): IEO[F, I, E, O2] =
     (unwrap: Inner[F, I, E, O2]).mapF(_.recover(f)).wrap
+  def handleErrorWith[I2 <: I, O2 >: O](
+    f: E => IEO[F, I2, Nothing, O2]
+  )(
+    implicit F: Monad[F]
+  ): IEO[F, I2, Nothing, O2] =
+    Kleisli((i: I2) => (unwrap: Inner[F, I2, E, O2])(i).leftFlatMap[O2, Nothing](e => f(e).unwrap(i))).wrap
+  def handleSomeErrorWith[I2 <: I, E2 >: E, O2 >: O](
+    f: PartialFunction[E2, IEO[F, I2, E2, O2]]
+  )(
+    implicit F: Monad[F]
+  ): IEO[F, I2, E2, O2] =
+    Kleisli((i: I2) => (unwrap: Inner[F, I2, E2, O2])(i).recoverWith(e => f(e).unwrap(i))).wrap
 
   // TODO: handleExceptions, handleSomeExceptions using ApplicativeError/MonadError
   // TODO: handleExceptionsWith, handleSomeExceptionsWith using ApplicativeError/MonadError
@@ -69,27 +80,50 @@ final class IEO[F[_], -I, +E, +O](
 
   def provide(i: I): IEO[F, Any, E, O] = Kleisli.liftF(unwrap.run(i)).wrap
 
+  // TODO: something like ZIO layer?
+
   def runToFEither(i: I): F[Either[E @uncheckedVariance, O @uncheckedVariance]] = unwrap.run(i).value
 }
 
 object IEO {
 
-  private type Inner[F[_], -I, +E, +O] = Kleisli[EitherT[F, E, *] @uncheckedVariance, I, O @uncheckedVariance]
-  implicit class InnerWrap[F[_], -I, +E, +O](private val inner: Inner[F, I, E, O]) extends AnyVal {
+  private[ce2] type Inner[F[_], -I, +E, +O] = Kleisli[EitherT[F, E, *] @uncheckedVariance, I, O @uncheckedVariance]
+  implicit private[ce2] class InnerWrap[F[_], -I, +E, +O](private val inner: Inner[F, I, E, O]) extends AnyVal {
     def wrap: IEO[F, I, E, O] = new IEO(inner)
   }
 
-  final class PureBuilder[F[_]] {
-    def apply[A](value: A)(implicit F: Applicative[F]): IEO[F, Any, Nothing, A] =
-      Kleisli.liftF(EitherT.pure(value)).wrap
+  final private[ce2] class PureBuilder[F[_]] {
+    def apply[O](value: O)(implicit F: Applicative[F]): IEO[F, Any, Nothing, O] =
+      Kleisli.liftF(EitherT.rightT(value)).wrap
   }
   def pure[F[_]]: PureBuilder[F] = new PureBuilder[F]
   def unit[F[_]: Applicative]: IEO[F, Any, Nothing, Unit] = pure[F](())
 
-  // TODO: raiseError
-  // TODO: raiseException
-  // TODO: delay
-  // TODO: defer
+  final private[ce2] class ErrorBuilder[F[_]] {
+    def apply[E](value: E)(implicit F: Applicative[F]): IEO[F, Any, E, Nothing] =
+      Kleisli.liftF[EitherT[F, E, *], Any, Nothing](EitherT.leftT(value)).wrap
+  }
+  def raiseError[F[_]]: ErrorBuilder[F] = new ErrorBuilder[F]
+
+  final private[ce2] class ExceptionBuilder[F[_]] {
+    def apply(throwable: Throwable)(implicit F: ApplicativeError[F, Throwable]): IEO[F, Any, Nothing, Nothing] =
+      Kleisli
+        .liftF[EitherT[F, Nothing, *], Any, Nothing](EitherT.liftF[F, Nothing, Nothing](F.raiseError(throwable)))
+        .wrap
+  }
+  def raiseException[F[_]]: ExceptionBuilder[F] = new ExceptionBuilder[F]
+
+  final private[ce2] class DeferBuilder[F[_]] {
+    def apply[I, E, O](ieo: => IEO[F, I, E, O])(implicit F: Monad[F], defer: Defer[F]): IEO[F, I, E, O] =
+      Kleisli.liftF(EitherT.liftF(defer.defer(F.pure(ieo)))).wrap.flatMap(identity(_)) // TODO: use flatten when defined
+  }
+  def defer[F[_]]: DeferBuilder[F] = new DeferBuilder[F]
+
+  final private[ce2] class DelayBuilder[F[_]] {
+    def apply[O](o: => O)(implicit F: Sync[F], defer: Defer[F]): IEO[F, Any, Nothing, O] =
+      Kleisli.liftF(EitherT.liftF(F.delay(o))).wrap
+  }
+  def delay[F[_]]: DelayBuilder[F] = new DelayBuilder[F]
 
   // TODO: lifting utils
 
