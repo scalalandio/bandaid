@@ -1,9 +1,9 @@
 package bandaid.ce2
 
 import bandaid.ce2.IEO._
-import cats.data.{ EitherT, Kleisli }
+import cats.data.{EitherT, Kleisli}
 import cats.effect.Sync
-import cats.{ Applicative, ApplicativeError, Defer, Functor, Monad }
+import cats.{Applicative, ApplicativeError, Defer, Functor, Monad, ~>}
 
 import scala.annotation.unchecked.uncheckedVariance
 
@@ -71,7 +71,7 @@ final class IEO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends
   // TODO: error to throwable
   // TODO: throwable to error
 
-  // TODO: zipping an parallel computations
+  // TODO: zipping and parallel computations
 
   def andThen[E2 >: E, O2](appended: IEO[F, O, E2, O2])(implicit F: Monad[F]): IEO[F, I, E2, O2] =
     (unwrap: Inner[F, I, E2, O]).andThen(appended.unwrap).wrap
@@ -120,12 +120,32 @@ object IEO {
   def defer[F[_]]: DeferBuilder[F] = new DeferBuilder[F]
 
   final private[ce2] class DelayBuilder[F[_]] {
-    def apply[O](o: => O)(implicit F: Sync[F], defer: Defer[F]): IEO[F, Any, Nothing, O] =
+    def apply[O](o: => O)(implicit F: Sync[F]): IEO[F, Any, Nothing, O] =
       Kleisli.liftF(EitherT.liftF(F.delay(o))).wrap
   }
   def delay[F[_]]: DelayBuilder[F] = new DelayBuilder[F]
+  
+  def lift[F[_], I, E, O](f: I => F[Either[E, O]]): IEO[F, I, E, O] =
+    Kleisli(f andThen EitherT.apply).wrap
+  def fromCats[F[_], I, E, O](
+    f: Kleisli[EitherT[F, E, *] @uncheckedVariance, I, O @uncheckedVariance]
+  ): IEO[F, I, E, O] = f.wrap
 
-  // TODO: lifting utils
+  final private[ce2] class EitherBuilder[F[_]] {
+    def apply[E, O](either: Either[E, O])(implicit F: Applicative[F]): IEO[F, Any, E, O] =
+      Kleisli.liftF(EitherT.fromEither[F](either)).wrap
+  }
+  def fromEither[F[_]]: EitherBuilder[F] = new EitherBuilder[F]
+
+  final private[ce2] class FBuilder[F[_]] {
+    def apply[O](fo: F[O])(implicit F: Functor[F]): IEO[F, Any, Nothing, O] =
+      Kleisli.liftF(EitherT.liftF[F, Nothing, O](fo)).wrap
+  }
+  def liftF[F[_]]: FBuilder[F] = new FBuilder[F]
+
+  def liftK[F[_]: Functor]: F ~> IEO[F, Any, Nothing, *] = new (F ~> IEO[F, Any, Nothing, *]) {
+    override def apply[A](fa: F[A]): IEO[F, Any, Nothing, A] = liftF[F](fa)
+  }
 
   // TODO: provide type classes
 }
