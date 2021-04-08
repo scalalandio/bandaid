@@ -3,7 +3,7 @@ package bandaid.ce2
 import bandaid.ce2.IEO._
 import cats.data.{ EitherT, Kleisli }
 import cats.effect.Sync
-import cats.{ ~>, Applicative, ApplicativeError, Defer, Functor, Monad }
+import cats.{ ~>, Applicative, ApplicativeError, Defer, Functor, Monad, MonadError }
 
 import scala.annotation.unchecked.uncheckedVariance
 
@@ -67,11 +67,29 @@ final class IEO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends
   ): IEO[F, I2, E2, O2] =
     Kleisli((i: I2) => (unwrap: Inner[F, I2, E2, O2])(i).recoverWith(e => f(e).unwrap(i))).wrap
 
-  // TODO: handleExceptions, handleSomeExceptions using ApplicativeError/MonadError
-  // TODO: handleExceptionsWith, handleSomeExceptionsWith using ApplicativeError/MonadError
+  def handleException[E2 >: E](f: Throwable => E2)(implicit F: ApplicativeError[F, Throwable]): IEO[F, I, E2, O] =
+    (unwrap: Inner[F, I, E2, O]).mapF(ea => EitherT(F.recover(ea.value) { case ex => Left(f(ex)) })).wrap
+  def handleSomeException[E2 >: E](
+    f:          PartialFunction[Throwable, E2]
+  )(implicit F: ApplicativeError[F, Throwable]): IEO[F, I, E2, O] =
+    (unwrap: Inner[F, I, E2, O]).mapF(ea => EitherT(F.recover(ea.value)(f.andThen(Left(_))))).wrap
+  def handleExceptionWith[I2 <: I, E2 >: E, O2 >: O](
+    f:          Throwable => IEO[F, I2, E2, O2]
+  )(implicit F: MonadError[F, Throwable]): IEO[F, I2, E2, O2] =
+    Kleisli((i: I2) =>
+      EitherT(F.recoverWith((unwrap: Inner[F, I2, E2, O2])(i).value) { case ex => f(ex).unwrap(i).value })
+    ).wrap
+  def handleSomeExceptionWith[I2 <: I, E2 >: E, O2 >: O](
+    f:          PartialFunction[Throwable, IEO[F, I2, E2, O2]]
+  )(implicit F: MonadError[F, Throwable]): IEO[F, I2, E2, O2] =
+    Kleisli((i: I2) =>
+      EitherT(F.recoverWith((unwrap: Inner[F, I2, E2, O2])(i).value)(f.andThen({ case x => x.unwrap(i).value })))
+    ).wrap
 
-  // TODO: error to throwable
-  // TODO: throwable to error
+  def errorToThrowable(f: E => Throwable)(implicit F: MonadError[F, Throwable]): IEO[F, I, Nothing, O] =
+    handleErrorWith[I, O](f.andThen(IEO.raiseException[F](_)))
+  def throwableToError[E2 >: E](f: Throwable => E2)(implicit F: MonadError[F, Throwable]): IEO[F, I, E2, O] =
+    handleExceptionWith[I, E2, O](f.andThen(IEO.raiseError[F](_)))
 
   // TODO: zipping and parallel computations
 
