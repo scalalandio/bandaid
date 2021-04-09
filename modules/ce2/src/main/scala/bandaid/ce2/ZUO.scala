@@ -1,10 +1,12 @@
 package bandaid.ce2
 
+import bandaid.ce2
 import cats.arrow.FunctionK
 import cats.{ ~>, Applicative, Defer, Functor, Monad }
 import cats.data.{ EitherT, Kleisli }
-import cats.effect.Sync
+import cats.effect.{ Concurrent, Sync }
 import cats.implicits._
+import cats.effect.implicits._
 
 import scala.annotation.unchecked.uncheckedVariance
 
@@ -72,6 +74,15 @@ final class ZUO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends
 
   // TODO: zipping and parallel computations par*
 
+  def race[I2 <: I, E2 >: E, O2 >: O](zuo: ZUO[I2, E2, O2])(implicit F: Concurrent[F]): ZUO[I2, E2, Either[O, O2]] = { (i: I2) =>
+    unwrap(i).race(zuo.unwrap(i)).map {
+      case Left(Left(ll))   => Left(ll)
+      case Left(Right(lr))  => Right(Left(lr))
+      case Right(Left(rl))  => Left(rl)
+      case Right(Right(rr)) => Right(Right(rr))
+    }
+  }.wrap
+
   // Typed errors handling
 
   def handleError[O2 >: O](f: E => O2)(implicit F: Functor[F]): DIO[I, O2] =
@@ -123,8 +134,6 @@ final class ZUO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends
   def run: I => F[Either[E @uncheckedVariance, O @uncheckedVariance]] = unwrap
 
   def provide(i: I): BIO[E, O] = ((_: Any) => unwrap(i)).wrap
-
-  // TODO: promenade
 
   // TODO: something like ZIO layer?
 }
