@@ -20,7 +20,7 @@ object Dependencies {
   )
 
   // functional libraries
-  val cats              = "org.typelevel" %% "cats-core" % catsVersion
+  val cats              = "org.typelevel" %% "cats-core"   % catsVersion
   val ce2               = "org.typelevel" %% "cats-effect" % "2.4.1"
   val ce3               = "org.typelevel" %% "cats-effect" % "3.0.1"
   // testing
