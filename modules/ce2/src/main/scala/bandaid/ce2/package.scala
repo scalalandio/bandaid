@@ -16,4 +16,8 @@ package object ce2 { // scalastyle:ignore package.object.name
   implicit private[ce2] class InnerWrap[F[_], -I, +E, +O](private val inner: Inner[F, I, E, O]) extends AnyVal {
     def wrap: ZUO[F, I, E, O] = new ZUO(inner)
   }
+
+  type IO[F[_], +O]      = ZUO[F, Any, Nothing, O] // Succeed with an `O`, might throw                , no requirements.
+  type BIO[F[_], +E, +O] = ZUO[F, Any, E, O] //       Succeed with an `O`, may fail with `E` or throw , no requirements.
+  type DIO[F[_], -I, +O] = ZUO[F, I, Nothing, O] //   Succeed with an `O`, might throw                , requires an `I`.
 }

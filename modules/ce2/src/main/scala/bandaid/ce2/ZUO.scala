@@ -1,6 +1,5 @@
 package bandaid.ce2
 
-import bandaid.ce2
 import cats.arrow.FunctionK
 import cats.{ ~>, Applicative, Defer, Functor, Monad }
 import cats.data.{ EitherT, Kleisli }
@@ -141,20 +140,18 @@ final class ZUO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends
 object ZUO {
 
   final private[ce2] class PureBuilder[F[_]] {
-    def apply[O](value: O)(implicit F: Applicative[F]): ZUO[F, Any, Nothing, O] =
-      ((_: Any) => value.asRight.pure[F]).wrap
+    def apply[O](value: O)(implicit F: Applicative[F]): IO[F, O] = ((_: Any) => value.asRight.pure[F]).wrap
   }
   def pure[F[_]]: PureBuilder[F] = new PureBuilder[F]
-  def unit[F[_]: Applicative]: ZUO[F, Any, Nothing, Unit] = pure[F](())
+  def unit[F[_]: Applicative]: IO[F, Unit] = pure[F](())
 
   final private[ce2] class ErrorBuilder[F[_]] {
-    def apply[E](error: E)(implicit F: Applicative[F]): ZUO[F, Any, E, Nothing] =
-      ((_: Any) => error.asLeft.pure[F]).wrap
+    def apply[E](error: E)(implicit F: Applicative[F]): BIO[F, E, Nothing] = ((_: Any) => error.asLeft.pure[F]).wrap
   }
   def raiseError[F[_]]: ErrorBuilder[F] = new ErrorBuilder[F]
 
   final private[ce2] class ExceptionBuilder[F[_]] {
-    def apply(throwable: Throwable)(implicit F: ApplicativeThrow[F]): ZUO[F, Any, Nothing, Nothing] =
+    def apply(throwable: Throwable)(implicit F: ApplicativeThrow[F]): IO[F, Nothing] =
       ((_: Any) => F.raiseError[Either[Nothing, Nothing]](throwable)).wrap
   }
   def raiseException[F[_]]: ExceptionBuilder[F] = new ExceptionBuilder[F]
@@ -166,33 +163,28 @@ object ZUO {
   def defer[F[_]]: DeferBuilder[F] = new DeferBuilder[F]
 
   final private[ce2] class DelayBuilder[F[_]] {
-    def apply[O](o: => O)(implicit F: Sync[F]): ZUO[F, Any, Nothing, O] =
-      ((_: Any) => F.delay(o.asRight)).wrap
+    def apply[O](o: => O)(implicit F: Sync[F]): IO[F, O] = ((_: Any) => F.delay(o.asRight)).wrap
   }
   def delay[F[_]]: DelayBuilder[F] = new DelayBuilder[F]
 
   def lift[F[_], I, E, O](f: I => F[Either[E, O]]): ZUO[F, I, E, O] = f.wrap
 
-  def fromCats[F[_], I, E, O](
-    f: Kleisli[EitherT[F, E, *] @uncheckedVariance, I, O @uncheckedVariance]
-  ): ZUO[F, I, E, O] = f.mapF(_.value).run.wrap
+  def fromCats[F[_], I, E, O](f: Kleisli[EitherT[F, E, *] @uncheckedVariance, I, O @uncheckedVariance]): ZUO[F, I, E, O] =
+    f.mapF(_.value).run.wrap
 
   final private[ce2] class EitherBuilder[F[_]] {
-    def apply[E, O](either: Either[E, O])(implicit F: Applicative[F]): ZUO[F, Any, E, O] =
+    def apply[E, O](either: Either[E, O])(implicit F: Applicative[F]): BIO[F, E, O] =
       ((_: Any) => either.pure[F]).wrap
   }
   def fromEither[F[_]]: EitherBuilder[F] = new EitherBuilder[F]
 
   final private[ce2] class FBuilder[F[_]] {
-    def apply[O](fo: F[O])(implicit F: Functor[F]): ZUO[F, Any, Nothing, O] =
-      ((_: Any) => fo.map(_.asRight)).wrap
+    def apply[O](fo: F[O])(implicit F: Functor[F]): IO[F, O] = ((_: Any) => fo.map(_.asRight)).wrap
   }
   def liftF[F[_]]: FBuilder[F] = new FBuilder[F]
 
-  def liftK[F[_]: Functor]: F ~> ZUO[F, Any, Nothing, *] = {
+  def liftK[F[_]: Functor]: F ~> IO[F, *] = {
     def fun[A](fa: F[A]) = liftF(fa)
-    FunctionK.lift[F, ZUO[F, Any, Nothing, *]](fun)
+    FunctionK.lift[F, IO[F, *]](fun)
   }
-
-  // TODO: provide type classes
 }
