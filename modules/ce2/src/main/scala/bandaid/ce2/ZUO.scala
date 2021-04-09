@@ -1,8 +1,7 @@
 package bandaid.ce2
 
-import bandaid.ce2.ZUO._
 import cats.arrow.FunctionK
-import cats.{ ~>, Applicative, ApplicativeError, Defer, Functor, Monad, MonadError }
+import cats.{ ~>, Applicative, Defer, Functor, Monad }
 import cats.data.{ EitherT, Kleisli }
 import cats.effect.Sync
 import cats.implicits._
@@ -21,15 +20,14 @@ import scala.annotation.unchecked.uncheckedVariance
   * your IO monad (handling side-effects, laziness, and exceptions), when your `F` values:
   *
   *  - are created from some input `I`
-  *  - can fail not only due to exceptions (infrastructure error/error unrelated to your domain), but also due do
-  *    business rules which enumerate possible errors as valid results and part of your domain (`E`),
-  *    which aren't part of your happy path and its output (`O`)
+  *  - can fail not only due to exceptions (infrastructure error/error unrelated to your domain), but also due do business rules which
+  *    enumerate possible errors as valid results and part of your domain (`E`), which aren't part of your happy path and its output (`O`)
   *
-  * Normally, you would have to either use [[cats.data.Kleisli]] and [[cats.data.EitherT]] directly, or rely on tagless
-  * final style with MTL or Tagless Final libraries and their type classes.
+  * Normally, you would have to either use [[cats.data.Kleisli]] and [[cats.data.EitherT]] directly, or rely on tagless final style with MTL
+  * or Tagless Final libraries and their type classes.
   *
-  * This library only requires the basic type classes for the IO monad (usually already available in scope if their type
-  * is known) and only when they are needed. This makes it friendlier to IDEs and increases discoverability.
+  * This library only requires the basic type classes for the IO monad (usually already available in scope if their type is known) and only
+  * when they are needed. This makes it friendlier to IDEs and increases discoverability.
   *
   * @param unwrap inner representation
   * @tparam F the IO monad
@@ -37,89 +35,99 @@ import scala.annotation.unchecked.uncheckedVariance
   * @tparam E a typed error that can be handled independently of [[java.lang.Throwable]]
   * @tparam O an output of the successful computation
   */
-final class ZUO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends AnyVal {
+final class ZUO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends AnyVal with ZUOAliases[F] {
 
-  def as[O2](value: O2)(implicit F: Functor[F]): ZUO[F, I, E, O2] = unwrap.andThen(_.map(_.map(_ => value))).wrap
+  // Contravariant methods
 
-  def contramap[I2](f: I2 => I): ZUO[F, I2, E, O] = (f andThen unwrap).wrap
+  def contramap[I2](f: I2 => I): ZUO[I2, E, O] = f.andThen(unwrap).wrap
 
-  def map[O2](f:        O => O2)(implicit F: Functor[F]): ZUO[F, I, E, O2] = unwrap.andThen(_.map(_.map(f))).wrap
-  def mapError[E2](f:   E => E2)(implicit F: Functor[F]): ZUO[F, I, E2, O] = unwrap.andThen(_.map(_.leftMap(f))).wrap
-  def bimap[E2, O2](fe: E => E2)(fo:         O => O2)(implicit F: Functor[F]): ZUO[F, I, E2, O2] =
-    unwrap.andThen(_.map(_.bimap(fe, fo))).wrap
+  // Bifunctor methods
 
-  def flatMap[I2 <: I, E2 >: E, O2](f: O => ZUO[F, I2, E2, O2])(implicit F: Monad[F]): ZUO[F, I2, E2, O2] =
+  def bimap[E2, O2](fe: E => E2)(fo:         O => O2)(implicit F: Functor[F]): ZUO[I, E2, O2] = unwrap.andThen(_.map(_.bimap(fe, fo))).wrap
+  def map[O2](f:        O => O2)(implicit F: Functor[F]): ZUO[I, E, O2] = bimap(identity(_))(f)
+  def mapError[E2](f:   E => E2)(implicit F: Functor[F]): ZUO[I, E2, O] = bimap(f)(identity(_))
+  def as[O2](value:     O2)(implicit F:      Functor[F]): ZUO[I, E, O2] = map(_ => value)
+
+  // Applicative methods
+
+  def map2[I2 <: I, E2 >: E, O2, O3](zuo: ZUO[I2, E2, O2])(f: (O, O2) => O3)(implicit F: Applicative[F]): ZUO[I2, E2, O3] = { (i: I2) =>
+    unwrap(i).map2(zuo.unwrap(i)) {
+      case (Right(l), Right(r)) => f(l, r).asRight[E2]
+      case (Left(e), _)         => (e: E2).asLeft[O3]
+      case (_, Left(e))         => (e: E2).asLeft[O3]
+    }
+  }.wrap
+  def left[I2 <: I, E2 >: E, O2](zuo:  ZUO[I2, E2, O2])(implicit F: Applicative[F]): ZUO[I2, E2, O]       = map2(zuo)((l, _) => l)
+  def right[I2 <: I, E2 >: E, O2](zuo: ZUO[I2, E2, O2])(implicit F: Applicative[F]): ZUO[I2, E2, O2]      = map2(zuo)((_, r) => r)
+  def both[I2 <: I, E2 >: E, O2](zuo:  ZUO[I2, E2, O2])(implicit F: Applicative[F]): ZUO[I2, E2, (O, O2)] = map2(zuo)((l, r) => l -> r)
+
+  // TODO: zipping and parallel computations >>, <<, par*
+
+  // Monad methods
+
+  def flatMap[I2 <: I, E2 >: E, O2](f: O => ZUO[I2, E2, O2])(implicit F: Monad[F]): ZUO[I2, E2, O2] =
     ((i: I2) => unwrap(i).flatMap(_.fold((_: E2).asLeft[O2].pure[F], f(_).unwrap(i)))).wrap
-  def flatten[I2 <: I, E2 >: E, O2](implicit ev: O <:< ZUO[F, I2, E2, O2], F: Monad[F]): ZUO[F, I2, E2, O2] =
+  def flatten[I2 <: I, E2 >: E, O2](implicit ev: O <:< ZUO[I2, E2, O2], F: Monad[F]): ZUO[I2, E2, O2] =
     flatMap(identity(_))
 
-  def handleError[O2 >: O](f: E => O2)(implicit F: Functor[F]): ZUO[F, I, Nothing, O2] =
-    unwrap.andThen(_.map(_.fold(e => f(e).asRight, _.asRight))).wrap
-  def handleSomeError[O2 >: O](f: PartialFunction[E, O2])(implicit F: Functor[F]): ZUO[F, I, E, O2] =
+  // Typed errors handling
+
+  def handleError[O2 >: O](f: E => O2)(implicit F: Functor[F]): DIO[I, O2] =
+    unwrap.andThen(_.map(_.fold(f, identity).asRight)).wrap
+  def handleSomeError[O2 >: O](f: E =>? O2)(implicit F: Functor[F]): ZUO[I, E, O2] =
     unwrap.andThen(_.map(_.recover(f))).wrap
-  def handleErrorWith[I2 <: I, O2 >: O](
-    f: E => ZUO[F, I2, Nothing, O2]
-  )(
-    implicit F: Monad[F]
-  ): ZUO[F, I2, Nothing, O2] = ((i: I2) => unwrap(i).flatMap(_.fold(e => f(e).unwrap(i), (_: O2).asRight.pure[F]))).wrap
-  def handleSomeErrorWith[I2 <: I, E2 >: E, O2 >: O](
-    f: PartialFunction[E2, ZUO[F, I2, E2, O2]]
-  )(
-    implicit F: Monad[F]
-  ): ZUO[F, I2, E2, O2] = { (i: I2) =>
+  def handleErrorWith[I2 <: I, O2 >: O](f: E => ZUO[I2, Nothing, O2])(implicit F: Monad[F]): DIO[I2, O2] =
+    ((i: I2) => unwrap(i).flatMap(_.fold(e => f(e).unwrap(i), (_: O2).asRight.pure[F]))).wrap
+  def handleSomeErrorWith[I2 <: I, E2 >: E, O2 >: O](f: E2 =>? ZUO[I2, E2, O2])(implicit F: Monad[F]): ZUO[I2, E2, O2] = { (i: I2) =>
     unwrap(i).flatMap {
       case Left(error) if f.isDefinedAt(error) => f(error).unwrap(i)
       case either                              => either.pure[F].widen[Either[E2, O2]]
     }
   }.wrap
 
-  def handleException[E2 >: E](f: Throwable => E2)(implicit F: ApplicativeError[F, Throwable]): ZUO[F, I, E2, O] =
+  // Exceptions handling
+
+  def handleException[E2 >: E](f: Throwable => E2)(implicit F: ApplicativeThrow[F]): ZUO[I, E2, O] =
     unwrap.andThen(_.widen[Either[E2, O]].handleError(f(_).asLeft[O])).wrap
-  def handleSomeException[E2 >: E](
-    f:          PartialFunction[Throwable, E2]
-  )(implicit F: ApplicativeError[F, Throwable]): ZUO[F, I, E2, O] =
+  def handleSomeException[E2 >: E](f: Throwable =>? E2)(implicit F: ApplicativeThrow[F]): ZUO[I, E2, O] =
     unwrap.andThen(_.widen[Either[E2, O]].recover(f(_).asLeft[O])).wrap
-  def handleExceptionWith[I2 <: I, E2 >: E, O2 >: O](
-    f:          Throwable => ZUO[F, I2, E2, O2]
-  )(implicit F: MonadError[F, Throwable]): ZUO[F, I2, E2, O2] =
+  def handleExceptionWith[I2 <: I, E2 >: E, O2 >: O](f: Throwable => ZUO[I2, E2, O2])(implicit F: MonadThrow[F]): ZUO[I2, E2, O2] =
     ((i: I2) => unwrap(i).widen[Either[E2, O2]].handleErrorWith(f(_).unwrap(i))).wrap
-  def handleSomeExceptionWith[I2 <: I, E2 >: E, O2 >: O](
-    f:          PartialFunction[Throwable, ZUO[F, I2, E2, O2]]
-  )(implicit F: MonadError[F, Throwable]): ZUO[F, I2, E2, O2] =
+  def handleSomeExceptionWith[I2 <: I, E2 >: E, O2 >: O](f: Throwable =>? ZUO[I2, E2, O2])(implicit F: MonadThrow[F]): ZUO[I2, E2, O2] =
     ((i: I2) => unwrap(i).widen[Either[E2, O2]].recoverWith(f(_).unwrap(i))).wrap
 
-  def errorToThrowable(f: E => Throwable)(implicit F: MonadError[F, Throwable]): ZUO[F, I, Nothing, O] =
+  // Conversions typed error <-> throwable
+
+  def errorToThrowable(f: E => Throwable)(implicit F: MonadThrow[F]): DIO[I, O] =
     handleErrorWith[I, O](f.andThen(ZUO.raiseException[F](_)))
-  def throwableToError[E2 >: E](f: Throwable => E2)(implicit F: MonadError[F, Throwable]): ZUO[F, I, E2, O] =
+  def throwableToError[E2 >: E](f: Throwable => E2)(implicit F: MonadThrow[F]): ZUO[I, E2, O] =
     handleExceptionWith[I, E2, O](f.andThen(ZUO.raiseError[F](_)))
 
-  // TODO: zipping and parallel computations
+  // Kleisli methods
 
-  def andThen[E2 >: E, O2](appended: ZUO[F, O, E2, O2])(implicit F: Monad[F]): ZUO[F, I, E2, O2] =
+  def andThen[E2 >: E, O2](appended: ZUO[O, E2, O2])(implicit F: Monad[F]): ZUO[I, E2, O2] =
     unwrap.andThenF {
       case Left(error)  => error.asLeft[O2].pure[F].widen[Either[E2, O2]]
       case Right(value) => appended.unwrap(value).widen[Either[E2, O2]]
     }.wrap
-
-  def compose[I2, E2 >: E](prepended: ZUO[F, I2, E2, I])(implicit F: Monad[F]): ZUO[F, I2, E2, O] =
+  def compose[I2, E2 >: E](prepended: ZUO[I2, E2, I])(implicit F: Monad[F]): ZUO[I2, E2, O] =
     prepended.unwrap.andThenF {
       case Left(error)  => error.asLeft[O].pure[F].widen[Either[E2, O]]
       case Right(value) => unwrap(value).widen[Either[E2, O]]
     }.wrap
 
-  def provide(i: I): ZUO[F, Any, E, O] = ((_: Any) => unwrap(i)).wrap
+  // Running
+
+  def run: I => F[Either[E @uncheckedVariance, O @uncheckedVariance]] = unwrap
+
+  def provide(i: I): BIO[E, O] = ((_: Any) => unwrap(i)).wrap
+
+  // TODO: promenade
 
   // TODO: something like ZIO layer?
-
-  def runToFEither(i: I): F[Either[E @uncheckedVariance, O @uncheckedVariance]] = unwrap(i)
 }
 
 object ZUO {
-
-  private[ce2] type Inner[F[_], -I, +E, +O] = I => F[Either[E, O] @uncheckedVariance]
-  implicit private[ce2] class InnerWrap[F[_], -I, +E, +O](private val inner: Inner[F, I, E, O]) extends AnyVal {
-    def wrap: ZUO[F, I, E, O] = new ZUO(inner)
-  }
 
   final private[ce2] class PureBuilder[F[_]] {
     def apply[O](value: O)(implicit F: Applicative[F]): ZUO[F, Any, Nothing, O] =
@@ -135,7 +143,7 @@ object ZUO {
   def raiseError[F[_]]: ErrorBuilder[F] = new ErrorBuilder[F]
 
   final private[ce2] class ExceptionBuilder[F[_]] {
-    def apply(throwable: Throwable)(implicit F: ApplicativeError[F, Throwable]): ZUO[F, Any, Nothing, Nothing] =
+    def apply(throwable: Throwable)(implicit F: ApplicativeThrow[F]): ZUO[F, Any, Nothing, Nothing] =
       ((_: Any) => F.raiseError[Either[Nothing, Nothing]](throwable)).wrap
   }
   def raiseException[F[_]]: ExceptionBuilder[F] = new ExceptionBuilder[F]
