@@ -159,25 +159,30 @@ trait ZUOModule[F[_]] {
 
   object ZUO {
 
-    def pure[O](value:   O)(implicit F: Applicative[F]): IO[O] = (_: Any) => value.asRight.pure[F]
+    def apply[I, E, O](f: I => F[Either[E, O]]): ZUO[I, E, O] = f
+
+    def pure[O](value:   O)(implicit F: Applicative[F]): IO[O] = fromEither(value.asRight)
     def unit(implicit F: Applicative[F]): IO[Unit] = pure(())
 
-    def raiseError[E](error: E)(implicit F: Applicative[F]): BIO[E, Nothing] = (_: Any) => error.asLeft.pure[F]
+    def raiseError[E](error: E)(implicit F: Applicative[F]): BIO[E, Nothing] = fromEither(error.asLeft)
 
     def raiseException(throwable: Throwable)(implicit F: ApplicativeThrow[F]): IO[Nothing] =
-      (_: Any) => throwable.raiseError[F, Either[Nothing, Nothing]]
+      fromEitherF(throwable.raiseError[F, Either[Nothing, Nothing]])
 
     def defer[I, E, O](zuo: => ZUO[I, E, O])(implicit F: Monad[F], defer: Defer[F]): ZUO[I, E, O] =
       ((_: I) => defer.defer(zuo.asRight.pure[F])).flatten
     def delay[O](o: => O)(implicit F: Sync[F]): IO[O] = (_: Any) => F.delay(o.asRight)
 
-    def lift[I, E, O](f: I => F[Either[E, O]]): ZUO[I, E, O] = f
+    def pass[I](implicit F: Applicative[F]): DIO[I, I] = (_: I).asRight.pure[F]
 
-    def fromCats[I, E, O](f: Kleisli[EitherT[F, E, *] @uncheckedVariance, I, O @uncheckedVariance]): ZUO[I, E, O] = f.mapF(_.value).run
+    def fromEither[E, O](either:   Either[E, O])(implicit F: Applicative[F]): BIO[E, O] = fromEitherF(either.pure[F])
+    def fromEitherF[E, O](eitherF: F[Either[E, O]]): BIO[E, O] = (_: Any) => eitherF
 
-    def fromEither[E, O](either: Either[E, O])(implicit F: Applicative[F]): BIO[E, O] = (_: Any) => either.pure[F]
+    def liftF[O](fo:               F[O])(implicit F:              Functor[F]):     IO[O]        = fromEitherF(fo.map(_.asRight))
+    def liftDI[I, O](f:            I => O)(implicit F:            Applicative[F]): DIO[I, O]    = pass[I].map(f)
+    def liftValidation[I, E, O](f: I => Either[E, O])(implicit F: Monad[F]):       ZUO[I, E, O] = pass[I].flatMap(i => fromEither(f(i)))
 
-    def liftF[O](fo: F[O])(implicit F: Functor[F]): IO[O] = (_: Any) => fo.map(_.asRight)
+    def liftCats[I, E, O](f: Kleisli[EitherT[F, E, *] @uncheckedVariance, I, O @uncheckedVariance]): ZUO[I, E, O] = f.mapF(_.value).run
 
     def liftK(implicit F: Functor[F]): F ~> IO = {
       def fun[A](fa: F[A]) = liftF(fa)
