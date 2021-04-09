@@ -61,14 +61,16 @@ final class ZUO[F[_], -I, +E, +O](private val unwrap: Inner[F, I, E, O]) extends
   def right[I2 <: I, E2 >: E, O2](zuo: ZUO[I2, E2, O2])(implicit F: Applicative[F]): ZUO[I2, E2, O2]      = map2(zuo)((_, r) => r)
   def both[I2 <: I, E2 >: E, O2](zuo:  ZUO[I2, E2, O2])(implicit F: Applicative[F]): ZUO[I2, E2, (O, O2)] = map2(zuo)((l, r) => l -> r)
 
-  // TODO: zipping and parallel computations >>, <<, par*
-
   // Monad methods
 
   def flatMap[I2 <: I, E2 >: E, O2](f: O => ZUO[I2, E2, O2])(implicit F: Monad[F]): ZUO[I2, E2, O2] =
     ((i: I2) => unwrap(i).flatMap(_.fold((_: E2).asLeft[O2].pure[F], f(_).unwrap(i)))).wrap
-  def flatten[I2 <: I, E2 >: E, O2](implicit ev: O <:< ZUO[I2, E2, O2], F: Monad[F]): ZUO[I2, E2, O2] =
-    flatMap(identity(_))
+  def flatTap[I2 <: I, E2 >: E, O2](f:           O => ZUO[I2, E2, O2])(implicit F: Monad[F]): ZUO[I2, E2, O]  = flatMap(o => f(o).as(o))
+  def flatten[I2 <: I, E2 >: E, O2](implicit ev: O <:< ZUO[I2, E2, O2], F:         Monad[F]): ZUO[I2, E2, O2] = flatMap(identity(_))
+  def former[I2 <: I, E2 >: E, O2](zuo:          ZUO[I2, E2, O2])(implicit F:      Monad[F]): ZUO[I2, E2, O]  = flatTap(_ => zuo)
+  def later[I2 <: I, E2 >: E, O2](zuo:           ZUO[I2, E2, O2])(implicit F:      Monad[F]): ZUO[I2, E2, O2] = flatMap(_ => zuo)
+
+  // TODO: zipping and parallel computations par*
 
   // Typed errors handling
 
