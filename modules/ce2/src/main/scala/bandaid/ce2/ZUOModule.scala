@@ -67,6 +67,8 @@ trait ZUOModule[F[_]] {
     def mapError[E2](f:   E => E2)(implicit F: Functor[F]): ZUO[I, E2, O] = bimap(f)(identity)
     def as[O2](value:     O2)(implicit F:      Functor[F]): ZUO[I, E, O2] = map(_ => value)
 
+    def asDI[O2 >: O](implicit F: Functor[F], tag: TypeTag[O2]): ZUO[I, E, DI[O2]] = map(DI(_))
+
     // Applicative methods
 
     def map2[I2 <: I, E2 >: E, O2, O3](zuo: ZUO[I2, E2, O2])(f: (O, O2) => O3)(implicit F: Applicative[F]): ZUO[I2, E2, O3] =
@@ -150,22 +152,23 @@ trait ZUOModule[F[_]] {
 
     def run: I => F[Either[E @uncheckedVariance, O @uncheckedVariance]] = unwrap
 
+    // Dependency injection
+
+    /** Provide whole `I` at once. */
     def provide(i: I): BIO[E, O] = (_: Any) => unwrap(i)
 
-    // inference seems to not work :/
-    def provideDI[I1, D <: DI[_]](di: DI[I1])(implicit ev: (DI[I1] with D) <:< I): ZUO[D, E, O] =
-      (d: D) => unwrap(ev(di.++[D](d)))
+    /** Provide one `DI[Sth]` out of whole `DI[X] with DI[Y] with ...` chain. Requires manual resolution of I1 and D. :( */
+    def provideDI[I1, D <: DI[_]](di: DI[I1])(implicit ev: (DI[I1] with D) <:< I): ZUO[D, E, O] = (d: D) => unwrap(ev(di ++ [D] d))
 
-    def provideSome[I2, E2 >: E, O2 <: DI[_]](
-      zuo:         ZUO[DI[I2], E2, O2]
-    )(implicit ev: (DI[I2] with O2) <:< I, tag: TypeTag[I2], F: Monad[F]): ZUO[I2, E2, O] =
-      (i2: I2) => {
-        val di2 = DI(i2)
-        zuo.unwrap(di2).flatMap[Either[E2, O]] {
+    /** Assuming `I` is `DI[X] with DI[Y] with ...` takes some `ZUO[DI..., E2, DI...]` to fill provide some of `DI`s. */
+    def provideDIFrom[I2 <: DI[_], E2 >: E, O2 <: DI[_]](
+      zuo:         ZUO[I2, E2, O2]
+    )(implicit ev: (O2 with I2) <:< I, F: Monad[F]): ZUO[I2, E2, O] =
+      (i2: I2) =>
+        zuo.unwrap(i2).flatMap[Either[E2, O]] {
           case Left(error) => (error: E2).asLeft[O].pure[F]
-          case Right(o2)   => unwrap(ev(di2.++[O2](o2))).widen
+          case Right(o2)   => unwrap(ev(o2 ++ [I2] i2)).widen
         }
-      }
   }
   type IO[+O]      = ZUO[Any, Nothing, O] // Succeed with an `O`, might throw                , no requirements.
   type BIO[+E, +O] = ZUO[Any, E, O] //       Succeed with an `O`, may fail with `E` or throw , no requirements.
@@ -193,7 +196,7 @@ trait ZUOModule[F[_]] {
     def fromEitherF[E, O](eitherF: F[Either[E, O]]): BIO[E, O] = (_: Any) => eitherF
 
     def liftF[O](fo:               F[O])(implicit F:              Functor[F]):     IO[O]        = fromEitherF(fo.map(_.asRight))
-    def liftDI[I, O](f:            I => O)(implicit F:            Applicative[F]): DIO[I, O]    = pass[I].map(f)
+    def liftFunction[I, O](f:      I => O)(implicit F:            Applicative[F]): DIO[I, O]    = pass[I].map(f)
     def liftValidation[I, E, O](f: I => Either[E, O])(implicit F: Monad[F]):       ZUO[I, E, O] = pass[I].flatMap(i => fromEither(f(i)))
 
     def liftCats[I, E, O](f: Kleisli[EitherT[F, E, *] @uncheckedVariance, I, O @uncheckedVariance]): ZUO[I, E, O] = f.mapF(_.value).run
