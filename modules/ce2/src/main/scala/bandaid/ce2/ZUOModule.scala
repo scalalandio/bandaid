@@ -8,6 +8,7 @@ import cats.implicits._
 import cats.effect.implicits._
 
 import scala.annotation.unchecked.uncheckedVariance
+import scala.reflect.runtime.universe._
 
 /**
   * Builds your ZUO module by fixing your IO monad of choice.
@@ -151,7 +152,20 @@ trait ZUOModule[F[_]] {
 
     def provide(i: I): BIO[E, O] = (_: Any) => unwrap(i)
 
-    // TODO: something like ZIO layer?
+    // inference seems to not work :/
+    def provideDI[I1, D <: DI[_]](di: DI[I1])(implicit ev: (DI[I1] with D) <:< I): ZUO[D, E, O] =
+      (d: D) => unwrap(ev(di.++[D](d)))
+
+    def provideSome[I2, E2 >: E, O2 <: DI[_]](
+      zuo:         ZUO[DI[I2], E2, O2]
+    )(implicit ev: (DI[I2] with O2) <:< I, tag: TypeTag[I2], F: Monad[F]): ZUO[I2, E2, O] =
+      (i2: I2) => {
+        val di2 = DI(i2)
+        zuo.unwrap(di2).flatMap[Either[E2, O]] {
+          case Left(error) => (error: E2).asLeft[O].pure[F]
+          case Right(o2)   => unwrap(ev(di2.++[O2](o2))).widen
+        }
+      }
   }
   type IO[+O]      = ZUO[Any, Nothing, O] // Succeed with an `O`, might throw                , no requirements.
   type BIO[+E, +O] = ZUO[Any, E, O] //       Succeed with an `O`, may fail with `E` or throw , no requirements.

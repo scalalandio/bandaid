@@ -16,6 +16,7 @@ lazy val ce2 = project.from("ce2")
   .configureModule
   .configureTests()
   .settings(libraryDependencies += Dependencies.ce2)
+  .settings(libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value)
 
 // TODO: prepare similar utility for ce3
 
