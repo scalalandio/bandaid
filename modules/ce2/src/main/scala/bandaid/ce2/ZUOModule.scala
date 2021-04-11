@@ -67,6 +67,7 @@ trait ZUOModule[F[_]] {
     def mapError[E2](f:   E => E2)(implicit F: Functor[F]): ZUO[I, E2, O] = bimap(f)(identity)
     def as[O2](value:     O2)(implicit F:      Functor[F]): ZUO[I, E, O2] = map(_ => value)
 
+    /** Adjust output as DI (required by [[provideDIFrom]]). */
     def asDI[O2 >: O](implicit F: Functor[F], tag: TypeTag[O2]): ZUO[I, E, DI[O2]] = map(DI(_))
 
     // Applicative methods
@@ -158,7 +159,7 @@ trait ZUOModule[F[_]] {
     def provide(i: I): BIO[E, O] = (_: Any) => unwrap(i)
 
     /** Provide one `DI[Sth]` out of whole `DI[X] with DI[Y] with ...` chain. Requires manual resolution of I1 and D. :( */
-    def provideDI[I1, D <: DI[_]](di: DI[I1])(implicit ev: (DI[I1] with D) <:< I): ZUO[D, E, O] = (d: D) => unwrap(ev(di ++ [D] d))
+    def provideDI[D1 <: DI[_], D2 <: DI[_]](d1: D1)(implicit ev: (D1 with D2) <:< I): ZUO[D2, E, O] = (d2: D2) => unwrap(ev(d1 ++ [D2] d2))
 
     /** Assuming `I` is `DI[X] with DI[Y] with ...` takes some `ZUO[DI..., E2, DI...]` to fill provide some of `DI`s. */
     def provideDIFrom[I2 <: DI[_], E2 >: E, O2 <: DI[_]](
