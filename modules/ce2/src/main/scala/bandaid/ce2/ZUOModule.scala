@@ -94,7 +94,7 @@ trait ZUOModule[F[_]] extends ZIOModuleLowPriority[F] {
     def former[I2 <: I, E2 >: E, O2](zuo:          ZUO[I2, E2, O2])(implicit F:      Monad[F]): ZUO[I2, E2, O]  = flatTap(_ => zuo)
     def later[I2 <: I, E2 >: E, O2](zuo:           ZUO[I2, E2, O2])(implicit F:      Monad[F]): ZUO[I2, E2, O2] = flatMap(_ => zuo)
 
-    // TODO: zipping and parallel computations par*
+    // The rest concurrent and async methods available via the worst Concurrent implementation
 
     def race[I2 <: I, E2 >: E, O2 >: O](zuo: ZUO[I2, E2, O2])(implicit F: Concurrent[F]): ZUO[I2, E2, Either[O, O2]] =
       (i: I2) =>
