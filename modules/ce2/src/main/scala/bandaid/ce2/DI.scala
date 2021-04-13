@@ -9,7 +9,6 @@ import scala.reflect.runtime.universe._
   */
 final class DI[Tpe] private (private val map: Map[TypeTag[_], Any]) {
 
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def get[Out >: Tpe: TypeTag]: Out = map(typeTag[Out]).asInstanceOf[Out]
 }
 object DI {
@@ -21,7 +20,6 @@ object DI {
 
   implicit class DIOps[D1 <: DI[_]](private val d1: D1) extends AnyVal {
 
-    @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
     def ++[D2 <: DI[_]](d2: D2): D1 with D2 = new DI(d1.map ++ d2.map).asInstanceOf[D1 with D2] // scalastyle:ignore method.name
   }
 }

@@ -3,7 +3,7 @@ package bandaid.ce2
 import cats.arrow.FunctionK
 import cats.{ ~>, Applicative, Defer, Functor, Monad }
 import cats.data.{ EitherT, Kleisli }
-import cats.effect.{ Concurrent, Sync }
+import cats.effect.{ ApplicativeThrow, Concurrent, ExitCase, Fiber, MonadThrow, Sync }
 import cats.implicits._
 import cats.effect.implicits._
 
@@ -22,7 +22,9 @@ import scala.reflect.runtime.universe._
   *
   * @tparam F the IO monad
   */
-trait ZUOModule[F[_]] {
+trait ZUOModule[F[_]] extends ZIOModuleLowPriority[F] {
+
+  type =>?[-A, +B] = PartialFunction[A, B]
 
   private[ce2] type Inner[-I, +E, +O] = I => F[Either[E, O] @uncheckedVariance]
 
@@ -207,4 +209,80 @@ trait ZUOModule[F[_]] {
       FunctionK.lift[F, IO](fun)
     }
   }
+
+  final class ZUOConcurrent[I, E](implicit F: Concurrent[F]) extends Concurrent[ZUO[I, E, *]] {
+
+    override def start[A](fa: ZUO[I, E, A]): ZUO[I, E, Fiber[ZUO[I, E, *], A]] = ZUO { i =>
+      PassError.in { passed: PassError[E] =>
+        passed
+          .hide(fa.run(i))
+          .start
+          .map(_.mapK(new (F ~> ZUO[I, E, *]) { def apply[A1](fa: F[A1]): ZUO[I, E, A1] = ZUO(_ => passed.show(fa)) }).asRight[E])
+      }
+    }
+
+    override def racePair[A, B](
+      fa: ZUO[I, E, A],
+      fb: ZUO[I, E, B]
+    ): ZUO[I, E, Either[(A, Fiber[ZUO[I, E, *], B]), (Fiber[ZUO[I, E, *], A], B)]] = ZUO { i =>
+      PassError.in { passed1: PassError[E] =>
+        PassError.in { passed2: PassError[E] =>
+          passed1
+            .hide(fa.run(i))
+            .racePair(passed2.hide(fb.run(i)))
+            .map[Either[(A, Fiber[ZUO[I, E, *], B]), (Fiber[ZUO[I, E, *], A], B)]] {
+              case Left((a, fiberB)) =>
+                Left(a -> fiberB.mapK(new (F ~> ZUO[I, E, *]) { def apply[A1](fa: F[A1]): ZUO[I, E, A1] = ZUO(_ => passed1.show(fa)) }))
+              case Right((fiberA, b)) =>
+                Right(fiberA.mapK(new (F ~> ZUO[I, E, *]) { def apply[A1](fa: F[A1]): ZUO[I, E, A1] = ZUO(_ => passed2.show(fa)) }) -> b)
+            }
+            .map(_.asRight[E])
+        }
+      }
+    }
+
+    override def async[A](k: (Either[Throwable, A] => Unit) => Unit): ZUO[I, E, A] = ZUO.liftF(F.async(k))
+
+    override def asyncF[A](k: (Either[Throwable, A] => Unit) => ZUO[I, E, Unit]): ZUO[I, E, A] = ZUO { i =>
+      PassError.in { passed: PassError[E] => passed.show(F.asyncF(k.andThen(_.run(i)).andThen(passed.hide(_)))) }
+    }
+
+    override def suspend[A](thunk: => ZUO[I, E, A]): ZUO[I, E, A] = ZUO(i => F.defer(thunk.run(i)))
+
+    override def bracketCase[A, B](
+      acquire: ZUO[I, E, A]
+    )(use:     A => ZUO[I, E, B])(
+      release: (A, ExitCase[Throwable]) => ZUO[I, E, Unit]
+    ): ZUO[I, E, B] = ZUO[I, E, B] { i =>
+      PassError.in { passed: PassError[E] =>
+        passed.hide(acquire.run(i)).bracketCase(use(_).run(i))((a, ec) => passed.hide(release(a, ec).run(i))).recover {
+          case passed(error) => error.asLeft[B]
+        }
+      }
+    }
+
+    override def raiseError[A](e: Throwable): ZUO[I, E, A] = ZUO.raiseException(e)
+
+    override def handleErrorWith[A](fa: ZUO[I, E, A])(f: Throwable => ZUO[I, E, A]): ZUO[I, E, A] = fa.handleExceptionWith(f)
+
+    override def flatMap[A, B](fa: ZUO[I, E, A])(f: A => ZUO[I, E, B]): ZUO[I, E, B] = fa.flatMap(f)
+
+    override def tailRecM[A, B](a: A)(f: A => ZUO[I, E, Either[A, B]]): ZUO[I, E, B] = ZUO { i =>
+      a.tailRecM(
+        // map into outer: Left = continue, Right = failed or finished
+        f(_).run(i).map[Either[A, Either[E, B]]] {
+          case Left(error)           => error.asLeft[B].asRight[A]
+          case Right(Left(continue)) => continue.asLeft[Either[E, B]]
+          case Right(Right(result))  => result.asRight[E].asRight[A]
+        }
+      )
+    }
+
+    override def pure[A](x: A): ZUO[I, E, A] = ZUO.pure(x)
+  }
+}
+trait ZIOModuleLowPriority[F[_]] { self: ZUOModule[F] =>
+
+  // FIXME
+  //implicit def adjustZUOTypeclass[TC[_], I, E](implicit tc: TC[ZUO[Any, Nothing, *]]): TC[ZUO[I, E, *]] = tc.asInstanceOf[TC[ZUO[I, E, *]]]
 }
