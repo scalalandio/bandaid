@@ -10,8 +10,10 @@ object Dependencies {
   val crossScalaVersions = Seq("2.13.5")
 
   // libraries versions
-  val catsVersion       = "2.5.0"
-  val specs2Version     = "4.10.6"
+  val catsVersion        = "2.5.0"
+  val catsEffect2Version = "2.4.1"
+  val catsEffect3Version = "3.0.2"
+  val specs2Version      = "4.10.6"
 
   // resolvers
   val resolvers = Seq(
@@ -20,9 +22,11 @@ object Dependencies {
   )
 
   // functional libraries
-  val cats              = "org.typelevel" %% "cats-core"   % catsVersion
-  val ce2               = "org.typelevel" %% "cats-effect" % "2.4.1"
-  val ce3               = "org.typelevel" %% "cats-effect" % "3.0.1"
+  val cats    = "org.typelevel" %% "cats-core" % catsVersion
+  val ce2     = "org.typelevel" %% "cats-effect" % catsEffect2Version
+  val ce2laws = "org.typelevel" %% "cats-effect-laws" % catsEffect2Version
+  val ce3     = "org.typelevel" %% "cats-effect" % catsEffect3Version
+  val ce3laws = "org.typelevel" %% "cats-effect-laws" % catsEffect3Version
   // testing
   val spec2Core       = "org.specs2" %% "specs2-core" % specs2Version
   val spec2Scalacheck = "org.specs2" %% "specs2-scalacheck" % specs2Version
@@ -30,8 +34,8 @@ object Dependencies {
 
 trait Dependencies {
 
-  val scalaOrganizationUsed = scalaOrganization
-  val scalaVersionUsed = scalaVersion
+  val scalaOrganizationUsed  = scalaOrganization
+  val scalaVersionUsed       = scalaVersion
   val crossScalaVersionsUsed = crossScalaVersions
 
   // resolvers
